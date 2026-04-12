@@ -14,44 +14,34 @@ import numpy as np
 import faiss  # faiss-cpu
 from openai import OpenAI
 
-# Optional: YouTube transcript support (recommended)
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
 except Exception:
     YouTubeTranscriptApi = None
 
-# Optional: PDF text extraction
+#PDF text extraction
 try:
     from pypdf import PdfReader
 except Exception:
     PdfReader = None
 
+# configration
+DEFAULT_LINKS_FILE = "palav_url_links.txt"  # This file contains list of approved links to the breastfeeding content
 
-# ----------------------------
-# Config
-# ----------------------------
-
-DEFAULT_LINKS_FILE = "palav_url_links.txt"  # put this in your repo (same folder as app.py)
-
-# Retrieval + chunking knobs
+# Chunking
 CHUNK_CHARS = 1800
 CHUNK_OVERLAP = 250
 TOP_K = 6
-MIN_SIM_THRESHOLD = 0.30  # raise => more strict "not found"; lower => more answers
+MIN_SIM_THRESHOLD = 0.30 
 
-# Embeddings model used for indexing + querying
-EMBED_MODEL = "text-embedding-3-small"  # can switch to text-embedding-3-large
+# Model used for indexing and querying
+EMBED_MODEL = "text-embedding-3-small"  
 
-# Answer model (you can try gpt-5.2 after everything works)
+# Model for ansering question
 ANSWER_MODEL_DEFAULT = "gpt-4.1-mini"
 
-# Persistence directory
-INDEX_DIR = ".palav_index_cache"  # local folder in app working directory
-
-
-# ----------------------------
-# Data Structures
-# ----------------------------
+# File to store index of breastfeeding content
+INDEX_DIR = ".palav_index_cache"  
 
 @dataclass
 class DocChunk:
@@ -60,11 +50,7 @@ class DocChunk:
     title: str
     text: str
 
-
-# ----------------------------
-# Utilities
-# ----------------------------
-
+#utilities
 def normalize_whitespace(s: str) -> str:
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
@@ -96,10 +82,7 @@ def extract_youtube_video_id(url: str) -> Optional[str]:
     return None
 
 
-# ----------------------------
-# Fetch + Extract
-# ----------------------------
-
+# Fetch and Extract main article 
 def fetch_html_text(url: str, timeout: int = 20) -> Tuple[str, str]:
     r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
@@ -157,10 +140,7 @@ def fetch_youtube_transcript_text(url: str) -> Tuple[str, str]:
     return f"YouTube transcript: {vid}", normalize_whitespace(text)
 
 
-# ----------------------------
-# Chunking
-# ----------------------------
-
+# Chunking text
 def chunk_text(text: str, chunk_chars: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> List[str]:
     if not text:
         return []
@@ -177,11 +157,7 @@ def chunk_text(text: str, chunk_chars: int = CHUNK_CHARS, overlap: int = CHUNK_O
         start = max(0, end - overlap)
     return chunks
 
-
-# ----------------------------
-# OpenAI Embeddings + FAISS
-# ----------------------------
-
+# FAISS to store the vectors
 def embed_texts(client: OpenAI, texts: List[str]) -> np.ndarray:
     resp = client.embeddings.create(model=EMBED_MODEL, input=texts)
     vecs = np.array([d.embedding for d in resp.data], dtype=np.float32)
@@ -194,11 +170,7 @@ def build_faiss_index(vectors: np.ndarray):
     index.add(vectors)
     return index
 
-
-# ----------------------------
-# Load URLs from file
-# ----------------------------
-
+# Load URLs from content file
 def load_allowed_urls(path: str) -> List[str]:
     if not os.path.exists(path):
         return []
@@ -221,10 +193,7 @@ def load_allowed_urls(path: str) -> List[str]:
     return out
 
 
-# ----------------------------
-# Persistence helpers
-# ----------------------------
-
+# Persistence
 def ensure_index_dir():
     os.makedirs(INDEX_DIR, exist_ok=True)
 
@@ -293,10 +262,7 @@ def load_index(paths: Dict[str, str]) -> Tuple[object, np.ndarray, List[DocChunk
     return index, vectors, chunks, report
 
 
-# ----------------------------
-# Ingest + Build (one-time)
-# ----------------------------
-
+# One time ingestion and build
 def ingest_sources(links_file: str) -> Tuple[List[DocChunk], Dict]:
     urls = load_allowed_urls(links_file)
     report = {"total_urls": len(urls), "ok": 0, "failed": []}
@@ -357,10 +323,7 @@ def build_or_load(links_file: str, api_key: str, force_rebuild: bool = False):
     return index, vectors, chunks, report, key, paths, False
 
 
-# ----------------------------
-# Retrieval + Answer
-# ----------------------------
-
+# Retrieval 
 SYSTEM_INSTRUCTIONS = """You are a breastfeeding education chatbot for an NGO.
 You MUST answer using only the provided SOURCES (snippets).
 If the SOURCES do not contain the answer, reply exactly:
@@ -425,11 +388,7 @@ Remember: If the SOURCES do not contain the answer, say exactly:
 
     return answer
 
-
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-
+# User Interface
 st.set_page_config(page_title="Palav Breastfeeding Chatbot", layout="centered")
 st.title("Palav Breastfeeding Userguide")
 
@@ -442,7 +401,6 @@ ADMIN_MODE = str(
     st.secrets.get("ADMIN_MODE", os.getenv("ADMIN_MODE", "false"))
 ).lower() in {"1", "true", "yes"}
 
-# (Optional) debug - use Streamlit, not print
 #st.write("ADMIN_MODE:", ADMIN_MODE)
 
 # Defaults for normal users
@@ -450,14 +408,14 @@ links_file = DEFAULT_LINKS_FILE
 answer_model = ANSWER_MODEL_DEFAULT
 force_rebuild = False
 
-# Admin-only controls (proper indentation!)
+# Contols for ADMIN
 if ADMIN_MODE:
     with st.expander("Admin (optional)", expanded=False):
         links_file = st.text_input("Links file path", value=DEFAULT_LINKS_FILE)
         answer_model = st.text_input("Answer model", value=ANSWER_MODEL_DEFAULT)
         force_rebuild = st.checkbox("Force rebuild index now", value=False)
 
-# Build or load index (persisted)
+# Build or Load index
 try:
     with st.spinner("Loading index (or building it once if missing)..."):
         index, vectors, chunks, report, key, paths, loaded_from_disk = build_or_load(
@@ -469,7 +427,7 @@ except Exception as e:
     st.error(f"Index load/build failed: {repr(e)}")
     st.stop()
 
-# Status panel
+# Status bar
 if ADMIN_MODE:
     with st.expander("Index status", expanded=False):
         st.write(f"Index key: `{key}`")
@@ -485,7 +443,7 @@ if ADMIN_MODE:
 #   "For permanent persistence, store the index in S3/Drive/DB."
 # )
 
-# Chat state
+# Chat session state
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "Welcome to Palav Breastifeeding Userguide. Ask me any breastfeeding question. I will answer only from the trusted resources.\n\n Disclaimer: The information that I provide is for education purpose and is not meant to replace medical advice. I am not HIPPA compliant, please do not enter PII or PHI information such as name, SSN, address, billing, medical record etc."}

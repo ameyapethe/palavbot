@@ -1,50 +1,17 @@
-# --------------------
-# Python
-# --------------------
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.so
-*.egg-info/
-dist/
-build/
-
-# --------------------
-# Virtual environments
-# --------------------
-.venv/
-venv/
-env/
-
-# --------------------
-# Streamlit
-# --------------------
-.streamlit/secrets.toml
-
-# --------------------
-# Index / cache files (FAISS + embeddings)
-# --------------------
+# --- Local App Data --
 .palav_index_cache/
-*.faiss
-*.npy
 
-# --------------------
-# Logs & temp
-# --------------------
-*.log
-*.tmp
-*.bak
+# --- Streamlit & Secrets ---
+.streamlit/
 
-# --------------------
-# OS files
-# --------------------
-.DS_Store
-Thumbs.db
+# --- Visual Studio / IDE Files ---
+palav.pyproj
+palav.slnx
 
-# --------------------
-# Editor / IDE
-# --------------------
-.vscode/
-.vs
-.idea/
+# --- Python Cache ---
+__pycache__/
+*.pyc
+
+# --- Environment
+venv/
+.env

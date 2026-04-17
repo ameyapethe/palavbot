@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Dict, List
@@ -16,12 +17,18 @@ from palav.retrieval import DocChunk, build_faiss_index
 EMBED_DIM = 8
 
 
+def _stable_bucket(tok: str, dim: int) -> int:
+    return int.from_bytes(hashlib.sha1(tok.encode()).digest()[:4], "big") % dim
+
+
 @dataclass
 class _StubEmbeddings:
     """Deterministic fake embeddings: hashes tokens into a fixed-dim vector.
 
-    Replaces the OpenAI embeddings API so unit tests stay offline. Vectors
-    are normalized so cosine similarity (IndexFlatIP) behaves sensibly.
+    Replaces the OpenAI embeddings API so unit tests stay offline. Uses sha1
+    (not Python's hash()) so bucket assignments survive PYTHONHASHSEED
+    randomization across processes. Vectors are normalized so cosine
+    similarity (IndexFlatIP) behaves sensibly.
     """
 
     def create(self, model: str, input: List[str]):  # noqa: A002 - match OpenAI SDK
@@ -29,7 +36,7 @@ class _StubEmbeddings:
         for text in input:
             v = np.zeros(EMBED_DIM, dtype=np.float32)
             for tok in text.lower().split():
-                v[hash(tok) % EMBED_DIM] += 1.0
+                v[_stable_bucket(tok, EMBED_DIM)] += 1.0
             norm = np.linalg.norm(v)
             if norm > 0:
                 v /= norm

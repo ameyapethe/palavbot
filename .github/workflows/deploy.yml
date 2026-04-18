@@ -6,22 +6,40 @@ on:
   schedule:
     # Weekly index refresh: Sunday 05:00 UTC (~midnight US Eastern).
     # Educational/medical sources rarely change, so weekly is plenty.
+    # Scheduled + push runs always target `test`; promoting to `prod`
+    # is an explicit workflow_dispatch action.
     - cron: "0 5 * * 0"
   workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target environment
+        type: choice
+        options: [test, prod]
+        default: test
 
 permissions:
   id-token: write
   contents: read
 
-env:
-  AWS_REGION: us-east-1
-  STACK_NAME: palavbot
-  ECR_REPOSITORY: palavbot
-  OPENAI_KEY_PARAM: /palavbot/openai_api_key
+concurrency:
+  group: deploy-${{ github.event.inputs.target || 'test' }}
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Reads env-scoped variables/secrets from this GitHub Environment.
+    # Configure two environments (Settings -> Environments): `test`, `prod`.
+    # Add "Required reviewers" to `prod` to gate promotions behind approval.
+    environment: ${{ github.event.inputs.target || 'test' }}
+    env:
+      AWS_REGION: us-east-1
+      TARGET: ${{ github.event.inputs.target || 'test' }}
+      # One stack + ECR repo + SSM key path per environment, so test and
+      # prod run in full isolation with distinct ApiUrls.
+      STACK_NAME: palavbot-${{ github.event.inputs.target || 'test' }}
+      ECR_REPOSITORY: palavbot-${{ github.event.inputs.target || 'test' }}
+      OPENAI_KEY_PARAM: /palavbot/${{ github.event.inputs.target || 'test' }}/openai_api_key
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +56,16 @@ jobs:
 
       - name: Run pytest (unit + integration)
         run: pytest tests/unit tests/integration -q
+
+      - name: Preflight - required environment variables
+        run: |
+          : "${{ vars.PALAV_COGNITO_USER_POOL_ID:?must be set in the '${{ env.TARGET }}' GitHub Environment}}"
+          : "${{ vars.PALAV_COGNITO_AUDIENCES:?must be set in the '${{ env.TARGET }}' GitHub Environment (comma-separated app client IDs)}}"
+          echo "Target:          $TARGET"
+          echo "Stack:           $STACK_NAME"
+          echo "ECR repo:        $ECR_REPOSITORY"
+          echo "OpenAI SSM path: $OPENAI_KEY_PARAM"
+          echo "User Pool:       ${{ vars.PALAV_COGNITO_USER_POOL_ID }}"
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -92,9 +120,12 @@ jobs:
             --no-fail-on-empty-changeset \
             --image-repositories "PalavbotFunction=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}" \
             --parameter-overrides \
+              StackName=$STACK_NAME \
               ImageUri=${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
               CorsOrigin=${{ vars.PALAV_CORS_ORIGIN || '*' }} \
-              OpenAIKeyParamName=${{ env.OPENAI_KEY_PARAM }}
+              OpenAIKeyParamName=$OPENAI_KEY_PARAM \
+              CognitoUserPoolId=${{ vars.PALAV_COGNITO_USER_POOL_ID }} \
+              CognitoAudiences=${{ vars.PALAV_COGNITO_AUDIENCES }}
 
       - name: Read stack outputs
         id: outputs
@@ -102,8 +133,12 @@ jobs:
           aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
             --query "Stacks[0].Outputs" --output json > outputs.json
           echo "PALAV_API_URL=$(jq -r '.[] | select(.OutputKey=="ApiUrl").OutputValue' outputs.json)" >> "$GITHUB_ENV"
-          echo "PALAV_USER_POOL_ID=$(jq -r '.[] | select(.OutputKey=="UserPoolId").OutputValue' outputs.json)" >> "$GITHUB_ENV"
-          echo "PALAV_CLIENT_ID=$(jq -r '.[] | select(.OutputKey=="UserPoolClientId").OutputValue' outputs.json)" >> "$GITHUB_ENV"
+          # Cognito is externally managed; smoke tests read pool + client from env-scoped repo variables.
+          echo "PALAV_USER_POOL_ID=${{ vars.PALAV_COGNITO_USER_POOL_ID }}" >> "$GITHUB_ENV"
+          echo "PALAV_CLIENT_ID=$(echo '${{ vars.PALAV_COGNITO_AUDIENCES }}' | cut -d, -f1)" >> "$GITHUB_ENV"
+          echo ""
+          echo "Deployment summary:"
+          cat outputs.json | jq '.'
 
       - name: Post-deploy smoke tests
         env:

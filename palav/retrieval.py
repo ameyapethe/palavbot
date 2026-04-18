@@ -105,8 +105,19 @@ def extract_youtube_video_id(url: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+
+
 def fetch_html_text(url: str, timeout: int = 20) -> Tuple[str, str]:
-    r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+    r = requests.get(url, timeout=timeout, headers=BROWSER_HEADERS)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
     for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "aside"]):
@@ -120,7 +131,7 @@ def fetch_html_text(url: str, timeout: int = 20) -> Tuple[str, str]:
 def fetch_pdf_text(url: str, timeout: int = 30) -> Tuple[str, str]:
     if pdfplumber is None:
         raise RuntimeError("pdfplumber is not installed.")
-    r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+    r = requests.get(url, timeout=timeout, headers=BROWSER_HEADERS)
     r.raise_for_status()
     title = url
     pages_text: List[str] = []
@@ -140,12 +151,25 @@ def fetch_youtube_transcript_text(url: str) -> Tuple[str, str]:
     vid = extract_youtube_video_id(url)
     if not vid:
         raise RuntimeError("Could not parse YouTube video id")
-    try:
-        transcript = YouTubeTranscriptApi.get_transcript(vid, languages=["en"])
-    except Exception:
-        transcript = YouTubeTranscriptApi.get_transcript(vid)
-    text = " ".join([x.get("text", "") for x in transcript])
-    return f"YouTube transcript: {vid}", normalize_whitespace(text)
+
+    # youtube-transcript-api v1.0 replaced the classmethod `get_transcript`
+    # with an instance method `fetch` that returns a FetchedTranscript object.
+    # Handle both so upgrades don't break the build.
+    if hasattr(YouTubeTranscriptApi, "get_transcript"):
+        try:
+            raw = YouTubeTranscriptApi.get_transcript(vid, languages=["en"])
+        except Exception:
+            raw = YouTubeTranscriptApi.get_transcript(vid)
+        segments = [x.get("text", "") for x in raw]
+    else:
+        api = YouTubeTranscriptApi()
+        try:
+            fetched = api.fetch(vid, languages=["en"])
+        except Exception:
+            fetched = api.fetch(vid)
+        segments = [getattr(s, "text", "") for s in fetched]
+
+    return f"YouTube transcript: {vid}", normalize_whitespace(" ".join(segments))
 
 
 def chunk_text(text: str, chunk_chars: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> List[str]:
@@ -180,6 +204,14 @@ def build_faiss_index(vectors: np.ndarray):
 
 
 def load_allowed_urls(path: str) -> List[str]:
+    """Extract URLs from the links file, one per occurrence.
+
+    Lines can contain a descriptive prefix plus one or more http(s) URLs
+    (e.g. ``"Title: https://a/b   https://c/d"``); all URLs are extracted
+    and deduplicated. Lines with no URL (section headers, orphan
+    descriptions) are skipped — the previous behavior of falling back to
+    the raw line produced bogus entries the fetcher always failed on.
+    """
     if not os.path.exists(path):
         return []
     urls: List[str] = []
@@ -189,7 +221,7 @@ def load_allowed_urls(path: str) -> List[str]:
             if not line or line.startswith("#"):
                 continue
             found = re.findall(r"https?://\S+", line)
-            urls.extend(found if found else [line])
+            urls.extend(found)
     return list(dict.fromkeys(urls))
 
 

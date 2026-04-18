@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Palavbot backend - Lambda container behind HTTP API, Cognito JWT auth.
+
+Parameters:
+  StackName:
+    Type: String
+    Default: palavbot
+  ImageUri:
+    Type: String
+    Description: Full ECR image URI (repo:tag) for the Lambda container image.
+  OpenAIKeyParamName:
+    Type: String
+    Default: /palavbot/openai_api_key
+    Description: SSM SecureString parameter holding the OpenAI API key.
+  CorsOrigin:
+    Type: String
+    Default: "*"
+    Description: Frontend origin allowed by CORS (set to production URL pre-launch).
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 1024
+    Architectures: [arm64]
+    Tracing: Active
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${StackName}-users
+      AutoVerifiedAttributes: [email]
+      UsernameAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub ${StackName}-frontend
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  PalavbotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${StackName}-api
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      ReservedConcurrentExecutions: 5
+      Environment:
+        Variables:
+          PALAV_CORS_ORIGINS: !Ref CorsOrigin
+          PALAV_OPENAI_KEY_SSM_PARAM: !Ref OpenAIKeyParamName
+          LOG_LEVEL: INFO
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${OpenAIKeyParamName}
+            - Effect: Allow
+              Action:
+                - kms:Decrypt
+              Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/ssm
+      Events:
+        ChatRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /chat
+            Method: POST
+        HealthRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /healthz
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  PalavbotLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${StackName}-api
+      RetentionInDays: !Ref LogRetentionDays
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      CorsConfiguration:
+        AllowOrigins: [!Ref CorsOrigin]
+        AllowHeaders: [authorization, content-type]
+        AllowMethods: [GET, POST, OPTIONS]
+        MaxAge: 600
+      Auth:
+        DefaultAuthorizer: CognitoJwt
+        Authorizers:
+          CognitoJwt:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+              audience:
+                - !Ref UserPoolClient
+
+Outputs:
+  ApiUrl:
+    Description: Base URL for the HTTP API.
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  FunctionName:
+    Value: !Ref PalavbotFunction

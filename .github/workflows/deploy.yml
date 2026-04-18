@@ -60,14 +60,17 @@ jobs:
         run: pytest tests/unit tests/integration -q
 
       - name: Preflight - required environment variables
+        env:
+          PALAV_COGNITO_USER_POOL_ID: ${{ vars.PALAV_COGNITO_USER_POOL_ID }}
+          PALAV_COGNITO_AUDIENCES: ${{ vars.PALAV_COGNITO_AUDIENCES }}
         run: |
-          : "${{ vars.PALAV_COGNITO_USER_POOL_ID:?must be set in the '${{ env.TARGET }}' GitHub Environment}}"
-          : "${{ vars.PALAV_COGNITO_AUDIENCES:?must be set in the '${{ env.TARGET }}' GitHub Environment (comma-separated app client IDs)}}"
+          : "${PALAV_COGNITO_USER_POOL_ID:?must be set in the '$TARGET' GitHub Environment}"
+          : "${PALAV_COGNITO_AUDIENCES:?must be set in the '$TARGET' GitHub Environment (comma-separated app client IDs)}"
           echo "Target:          $TARGET"
           echo "Stack:           $STACK_NAME"
           echo "ECR repo:        $ECR_REPOSITORY"
           echo "OpenAI SSM path: $OPENAI_KEY_PARAM"
-          echo "User Pool:       ${{ vars.PALAV_COGNITO_USER_POOL_ID }}"
+          echo "User Pool:       $PALAV_COGNITO_USER_POOL_ID"
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:

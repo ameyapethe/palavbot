@@ -39,7 +39,9 @@ jobs:
       # prod run in full isolation with distinct ApiUrls.
       STACK_NAME: palavbot-${{ github.event.inputs.target || 'test' }}
       ECR_REPOSITORY: palavbot-${{ github.event.inputs.target || 'test' }}
-      OPENAI_KEY_PARAM: /palavbot/${{ github.event.inputs.target || 'test' }}/openai_api_key
+      # Single shared OpenAI key across environments — intentional.
+      # Per-env split would be /palavbot/{target}/openai_api_key.
+      OPENAI_KEY_PARAM: /palavbot/openai_api_key
     steps:
       - uses: actions/checkout@v4
 

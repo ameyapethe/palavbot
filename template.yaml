@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Palavbot backend - Lambda container behind HTTP API, Cognito JWT auth.
+Description: Palavbot backend - Lambda container behind HTTP API, validating JWTs from an externally-managed Cognito User Pool.
 
 Parameters:
   StackName:
@@ -20,6 +20,18 @@ Parameters:
   LogRetentionDays:
     Type: Number
     Default: 7
+  CognitoUserPoolId:
+    Type: String
+    Description: >
+      ID of the externally-managed Cognito User Pool whose JWTs the API trusts
+      (e.g. us-east-1_XXXXXXXXX). This stack does NOT create or own the pool.
+    AllowedPattern: "^[a-z0-9-]+_[A-Za-z0-9]+$"
+  CognitoAudiences:
+    Type: CommaDelimitedList
+    Description: >
+      Comma-separated list of Cognito App Client IDs (audiences) whose ID
+      tokens the API accepts. Typically one per app client that will be
+      issuing JWTs forwarded to palavbot.
 
 Globals:
   Function:
@@ -29,39 +41,6 @@ Globals:
     Tracing: Active
 
 Resources:
-  UserPool:
-    Type: AWS::Cognito::UserPool
-    Properties:
-      UserPoolName: !Sub ${StackName}-users
-      AutoVerifiedAttributes: [email]
-      UsernameAttributes: [email]
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 12
-          RequireUppercase: true
-          RequireLowercase: true
-          RequireNumbers: true
-          RequireSymbols: false
-
-  UserPoolClient:
-    Type: AWS::Cognito::UserPoolClient
-    Properties:
-      UserPoolId: !Ref UserPool
-      ClientName: !Sub ${StackName}-frontend
-      GenerateSecret: false
-      ExplicitAuthFlows:
-        - ALLOW_USER_PASSWORD_AUTH
-        - ALLOW_USER_SRP_AUTH
-        - ALLOW_REFRESH_TOKEN_AUTH
-      PreventUserExistenceErrors: ENABLED
-      AccessTokenValidity: 60
-      IdTokenValidity: 60
-      RefreshTokenValidity: 30
-      TokenValidityUnits:
-        AccessToken: minutes
-        IdToken: minutes
-        RefreshToken: days
-
   PalavbotFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -122,17 +101,15 @@ Resources:
           CognitoJwt:
             IdentitySource: $request.header.Authorization
             JwtConfiguration:
-              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
-              audience:
-                - !Ref UserPoolClient
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}
+              audience: !Ref CognitoAudiences
 
 Outputs:
   ApiUrl:
     Description: Base URL for the HTTP API.
     Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
-  UserPoolId:
-    Value: !Ref UserPool
-  UserPoolClientId:
-    Value: !Ref UserPoolClient
   FunctionName:
     Value: !Ref PalavbotFunction
+  TrustedUserPoolId:
+    Description: Cognito User Pool whose JWTs this deployment trusts (external; not owned by this stack).
+    Value: !Ref CognitoUserPoolId

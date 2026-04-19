@@ -89,7 +89,11 @@ Resources:
   HttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
-      StageName: prod
+      # Use the $default stage so invoke URLs have no stage prefix
+      # (https://<id>.execute-api.../chat, not .../prod/chat). A named
+      # stage causes the prefix to leak through the Lambda Web Adapter
+      # into FastAPI's routing, which then 404s every request.
+      StageName: $default
       CorsConfiguration:
         AllowOrigins: [!Ref CorsOrigin]
         AllowHeaders: [authorization, content-type]

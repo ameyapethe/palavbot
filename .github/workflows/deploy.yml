@@ -145,6 +145,24 @@ jobs:
           echo "Deployment summary:"
           cat outputs.json | jq '.'
 
+      - name: Post-deploy healthz check
+        # Unauthenticated liveness probe. Runs unconditionally — needs no
+        # Cognito credentials, so it's always the first thing to catch a
+        # deploy that went green but is serving 404/500. Retries to
+        # absorb cold-start latency.
+        run: |
+          for i in 1 2 3 4 5; do
+            if curl -sSfo /tmp/healthz.json --max-time 20 "$PALAV_API_URL/healthz"; then
+              echo "healthz OK on attempt $i:"
+              jq '.' /tmp/healthz.json
+              exit 0
+            fi
+            echo "healthz attempt $i failed; retrying in 5s..."
+            sleep 5
+          done
+          echo "healthz failed after 5 attempts against $PALAV_API_URL"
+          exit 1
+
       - name: Post-deploy smoke tests
         env:
           PALAV_TEST_USER: ${{ secrets.PALAV_TEST_USER }}

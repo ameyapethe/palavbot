@@ -36,7 +36,10 @@ Parameters:
 Globals:
   Function:
     Timeout: 30
-    MemorySize: 1024
+    # 2048 MB (2 vCPU) — the 1024 MB baseline hit the 10s Lambda init
+    # budget during cold starts (observed 9.89s of 10s). More memory
+    # also buys more CPU, which roughly halves cold-start time.
+    MemorySize: 2048
     Architectures: [arm64]
     Tracing: Active
 
@@ -86,6 +89,12 @@ Resources:
       LogGroupName: !Sub /aws/lambda/${StackName}-api
       RetentionInDays: !Ref LogRetentionDays
 
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${StackName}
+      RetentionInDays: !Ref LogRetentionDays
+
   HttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -94,6 +103,13 @@ Resources:
       # stage causes the prefix to leak through the Lambda Web Adapter
       # into FastAPI's routing, which then 404s every request.
       StageName: $default
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        # JSON format makes CloudWatch Logs Insights queries trivial.
+        # Includes authorizer error/claims so JWT auth failures are visible —
+        # otherwise 401s never reach Lambda and are effectively invisible.
+        Format: >-
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","path":"$context.path","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength","responseLatency":"$context.responseLatency","integrationLatency":"$context.integrationLatency","integrationStatus":"$context.integrationStatus","authorizerError":"$context.authorizer.error","userSub":"$context.authorizer.claims.sub","userAud":"$context.authorizer.claims.aud"}
       CorsConfiguration:
         AllowOrigins: [!Ref CorsOrigin]
         AllowHeaders: [authorization, content-type]
